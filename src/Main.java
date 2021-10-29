@@ -23,75 +23,6 @@ public class Main {
         }
     }
 
-    private static function[] getNativeFunctions(String filename){
-        File file = new File(filename);
-        Scanner scanner = null;
-        try {
-            scanner = new Scanner(file);
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        }
-        ArrayList<function> functions = new ArrayList<>();
-        while (scanner.hasNextLine()){
-            String line = scanner.nextLine();
-            if (line.contains(" native ")){
-                int paramIndex = line.indexOf("(");
-                int nameIndex = line.substring(0, paramIndex).lastIndexOf(" ");
-                int typeIndex = line.substring(0, nameIndex).indexOf(" ");
-                int closeIndex = line.indexOf(")");
-
-                String parameter = line.substring(paramIndex + 1, closeIndex);
-
-                String[] parameters = parameter.split(",");
-
-                if(!parameter.isEmpty()) {
-                    for (int i = 0; i < parameters.length; i++) {
-                        parameters[i] = parameters[i].substring(0, parameters[i].indexOf(" "));
-                    }
-                }
-
-                functions.add(new function(line.substring(nameIndex, paramIndex), line.substring(typeIndex, nameIndex), parameters));
-            }
-        }
-        return functions.toArray(new function[]{});
-    }
-
-    // Getting an array of indexes that contains the find string
-    private static Integer[] getIndexes(String[] lines, String find) {
-        return (Integer[]) IntStream.range(0, lines.length).filter(i -> lines[i].contains(find)).boxed().collect(Collectors.toCollection(ArrayList::new)).toArray();
-    }
-
-    private static String[] getPackages(String filename) throws FileNotFoundException {
-        File java = new File(filename);
-        Scanner scanner = new Scanner(java);
-        while (scanner.hasNextLine()){
-            String line = scanner.nextLine();
-            if(line.startsWith("package")){
-                String[] packages = line.substring(7).split("(\\x2E)");
-                packages[0] = packages[0].substring(1);
-                packages[packages.length - 1] = packages[packages.length - 1].substring(0, packages[packages.length - 1].length() - 1);
-                return packages;
-            }
-        }
-        return new String[]{};
-    }
-
-    private static String getClassName(String filename) {
-        File java = new File(filename);
-        try {
-            Scanner scanner = new Scanner(java);
-            while (scanner.hasNextLine()) {
-                String line = scanner.nextLine();
-                if (line.startsWith("public class ")) {
-                    return line.substring(13, line.length() - 2);
-                }
-            }
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        }
-        return "";
-    }
-
     public static void main(String[] args) {
         if(args.length < 2) {
             System.out.println("""
@@ -111,81 +42,151 @@ public class Main {
     }
 
     private static void GenerateCpp(String file) {
-        File source = new File(file);
-        if (!source.exists()) System.out.println("File not found");
+        //region Extracting info from .java file
+        // Data variables
+        String[] packages = {};
+        String classname = "";
+        ArrayList<function> functions = new ArrayList<>();
 
-        // Making Cava directory for generated file
+        // Getting java source file
+        File source = new File(file);
+        if (!source.exists()) {
+            System.out.println("File not found");
+            return;
+        }
+
+        Scanner scanner;
+        try {
+            scanner = new Scanner(source);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+            return;
+        }
+
+        //region Extraction loop
+        while (scanner.hasNextLine())
+        {
+            String line = scanner.nextLine();
+
+            // Package handling
+            if(line.startsWith("package ")){
+                packages = line.substring(7).split("(\\x2E)");
+                packages[0] = packages[0].substring(1);
+                packages[packages.length - 1] = packages[packages.length - 1].substring(0, packages[packages.length - 1].length() - 1);
+            }
+
+            // Class handling
+            else if (line.startsWith("public class ")){
+                classname = line.substring(13, line.length() - 2);
+            }
+
+            //region Function handling
+            else if (line.contains(" native ")){
+                int paramIndex = line.indexOf("(");
+                int nameIndex = line.substring(0, paramIndex).lastIndexOf(" ");
+                int typeIndex = line.substring(0, nameIndex).lastIndexOf(" ");
+                int closeIndex = line.indexOf(")");
+
+                String parameter = line.substring(paramIndex + 1, closeIndex);
+
+                String[] parameters = parameter.split(",");
+
+                if(!parameter.isEmpty()) {
+                    for (int i = 0; i < parameters.length; i++) {
+                        parameters[i] = parameters[i].substring(0, parameters[i].indexOf(" "));
+                    }
+                }
+
+                functions.add(new function(line.substring(nameIndex, paramIndex), line.substring(typeIndex, nameIndex), parameters));
+            }
+            //endregion
+        }
+        //endregion
+
+        //endregion
+
+        // Making Cava directory for generated files
         File dir = new File("Cava");
         if(!dir.exists()) if (!dir.mkdir()) System.out.println("Could not create directory Cava");
 
-        // Running javac on the specified file
+        //region Running javac on the specified file
         try {
             Process process = Runtime.getRuntime().exec(new String[]{"\"" + System.getenv("JAVA_HOME") + "\\bin\\javac.exe\"", "-d", ".\\Cava","-h", ".\\Cava", "\"" + file + "\""});
             process.waitFor();
         } catch (IOException | InterruptedException e) {
             System.out.println("Error while running javac");
+            return;
         }
+        //endregion
 
-        // Extracting package info from the .java file
-        String[] packages = new String[]{};
-        try {
-            packages = getPackages(file);
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        }
-
-        // Extracting class name info from the .java file
-        String classname = getClassName(file);
-
-        // Extracting functions with the native keyword
-        getNativeFunctions(file);
-
+        //region Opening generated .h file
         // Getting the .h file name by adding the packages
         StringBuilder hFileName = new StringBuilder("Cava/");
-        for (String pack : packages)
-        {
-            hFileName.append(pack).append("_");
-        }
+        for (String pack : packages) hFileName.append(pack).append("_");
         hFileName.append(file, 0, file.length() - 4).append("h");
 
         // Opening the .h file generated by javac
         File hFile = new File(hFileName.toString());
-        if(!hFile.exists()) System.out.println("Could not find header file");
+        if(!hFile.exists()){
+            System.out.println("Could not find header file");
+            return;
+        }
+        //endregion
 
-        // Writing the correct things to the .h file
+        //region Editing the .h file
         if(hFile.canWrite() && hFile.canRead()){
             try {
-                // Read
-                Scanner scanner = new Scanner(hFile);
+                //region Read and save entire .h file into a list
+                scanner = new Scanner(hFile);
                 ArrayList<String> lines = new ArrayList<>();
                 while(scanner.hasNextLine()) lines.add(scanner.nextLine());
                 scanner.close();
+                //endregion
 
-                // Modify
+                //region Modify the .h file to include all data from the .java file
                 // TODO find all occurrences of JNIEXPORT and insert a function declaration 2 lines below with c++ types
 
                 lines.add("/// CAVA GENERATION");
                 int lineIndex = lines.size();
                 StringBuilder indent = new StringBuilder();
 
-                // Adding namespaces
-                for (String pack : packages)
-                {
+                //region Adding namespaces
+                for (String pack : packages) {
                     lines.add(lineIndex, indent + "namespace " + pack);
                     lines.add(lineIndex + 1, "{");
                     lineIndex += 2;
                     lines.add(lineIndex, indent + "}");
                     indent.append("    ");
                 }
+                //endregion
 
-                // Adding class
+                //region Adding class
                 lines.add(lineIndex, indent + "class " + classname);
                 lines.add(lineIndex + 1, indent + "{");
-                lineIndex += 2;
+                lines.add(lineIndex + 2, indent + "public:");
+                lineIndex += 3;
                 lines.add(lineIndex, indent + "}");
                 indent.append("    ");
+                //endregion
 
-                // Write
+                //region Adding native functions
+                for(function func : functions) {
+                    StringBuilder funcString = new StringBuilder(indent + func.ReturnType + func.Name + "(");
+
+                    for(String param : func.Params)
+                    {
+                        funcString.append(param);
+                    }
+
+                    funcString.append(");");
+
+                    lines.add(lineIndex, funcString.toString());
+                }
+                //endregion
+
+                //endregion
+
+                //region Write the list into the .h file
                 FileWriter writer = new FileWriter(hFile);
 
                 StringBuilder str = new StringBuilder();
@@ -193,11 +194,22 @@ public class Main {
 
                 writer.write(str.toString());
                 writer.close();
+                //endregion
             } catch (IOException e) {
                 e.printStackTrace();
+                return;
             }
         }
+        //endregion
 
+        //region Generating .cpp file
+
+        // Opening the .h file generated by javac
+        File cpp = new File("Cava/Cava.cpp");
+        if(cpp.exists()){
+            if(!cpp.delete()) System.out.println("Could not delete Cava.cpp");
+        }
+        //endregion
     }
     private static void Build(String file) {
 
